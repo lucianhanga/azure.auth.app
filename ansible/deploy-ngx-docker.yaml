@@ -1,0 +1,25 @@
+---
+- name: Deploy demo NGINX container
+  hosts: azure
+  become: true
+
+  tasks:
+    - name: Ensure Docker service is running
+      service:
+        name: docker
+        state: started
+        enabled: true
+
+    - name: Pull the latest nginx image
+      community.docker.docker_image:
+        name: nginx
+        source: pull
+
+    - name: Run NGINX container on port 80
+      community.docker.docker_container:
+        name: demo-nginx
+        image: nginx
+        state: started
+        restart_policy: always
+        ports:
+          - "80:80"
