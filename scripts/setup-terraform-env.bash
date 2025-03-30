@@ -6,37 +6,43 @@ APP_NAME="Foo Application"
 RESOURCE_GROUP_NAME="foo-app-rg"
 LOCATION="westeurope"
 CONTAINER_NAME="tfstate"
-TERRAFORM_FOO_APP_SP_NAME="${APP_NAME} SP"
 TFVARS_FILE="../terraform/terraform.tfvars"
 
 # Default flags
 DRY_RUN=true
 RUN_PROVISION=false
 RUN_DESTROY=false
+POSTFIX=""
 
+# Functions
 function usage {
   echo -e "\033[1;36mUsage:\033[0m"
-  echo "  $0 --provision [--no-dry-run]   Run infrastructure setup (default: dry run)"
-  echo "  $0 --destroy [--no-dry-run]     Tear down created resources (default: dry run)"
-  echo "  $0 --help                       Show detailed help"
-  echo "  $0 --usage                      Show this usage summary"
+  echo "  $0 --provision --postfix <name> [--no-dry-run]"
+  echo "  $0 --destroy   --postfix <name> [--no-dry-run]"
+  echo "  $0 --help | --usage"
+  echo
+  echo "Options:"
+  echo "  --provision         Run infrastructure setup (default: dry run)"
+  echo "  --destroy           Tear down infrastructure (default: dry run)"
+  echo "  --postfix <name>    Required postfix to uniquely name storage account"
+  echo "  --no-dry-run        Apply changes for real"
+  echo "  --help              Show detailed help"
+  echo "  --usage             Show usage"
   echo
   echo "Examples:"
-  echo "  $0 --provision"
-  echo "  $0 --provision --no-dry-run"
-  echo "  $0 --destroy --no-dry-run"
+  echo "  $0 --provision --postfix myproject"
+  echo "  $0 --destroy --postfix myproject --no-dry-run"
 }
 
 function help {
   echo -e "\033[1;36mAzure Terraform Environment Setup Script\033[0m"
   echo
-  echo "This script prepares or destroys the Azure environment for Terraform:"
-  echo "- Creates or removes a resource group"
+  echo "This script provisions or destroys Azure infrastructure for Terraform state management:"
+  echo "- Creates or deletes a resource group"
   echo "- Manages a service principal"
-  echo "- Manages an Azure Storage account + container"
-  echo "- Writes or deletes terraform.tfvars"
-  echo
-  echo "By default, all actions are run in dry-run mode. Use --no-dry-run to apply changes."
+  echo "- Manages a unique Azure Storage account (with postfix)"
+  echo "- Creates a storage container with uniqueness check"
+  echo "- Generates terraform.tfvars"
   echo
   usage
 }
@@ -54,48 +60,33 @@ function error_exit {
   exit 1
 }
 
-function destroy {
-  if $DRY_RUN; then
-    log "[Dry Run] Would delete service principal and resource group."
-    return
-  fi
-
-  log "Destroying Terraform SP and resource group..."
-
-  APP_ID=$(az ad sp list --display-name "$TERRAFORM_FOO_APP_SP_NAME" --query "[0].appId" -o tsv)
-  if [[ -n "$APP_ID" ]]; then
-    az ad sp delete --id "$APP_ID" || warn "Failed to delete SP: $APP_ID"
-    log "Deleted service principal: $APP_ID"
-  else
-    warn "Service principal not found."
-  fi
-
-  az group delete --name "$RESOURCE_GROUP_NAME" --yes --no-wait || warn "Failed to delete resource group."
-  [[ -f "$TFVARS_FILE" ]] && rm "$TFVARS_FILE"
-
-  log "Environment destroyed."
-  exit 0
-}
-
 # Parse arguments
 if [[ $# -eq 0 ]]; then
   usage
   exit 0
 fi
 
-for arg in "$@"; do
-  case $arg in
+while [[ $# -gt 0 ]]; do
+  case $1 in
     --provision)
       RUN_PROVISION=true
+      shift
       ;;
     --destroy)
       RUN_DESTROY=true
+      shift
       ;;
     --dry-run)
       DRY_RUN=true
+      shift
       ;;
     --no-dry-run)
       DRY_RUN=false
+      shift
+      ;;
+    --postfix)
+      POSTFIX="$2"
+      shift 2
       ;;
     --help)
       help
@@ -106,101 +97,153 @@ for arg in "$@"; do
       exit 0
       ;;
     *)
-      error_exit "Unknown option: $arg. Use --help to see available options."
+      error_exit "Unknown option: $1. Use --help to see available options."
       ;;
   esac
 done
+
+# Validate postfix
+if [[ -z "$POSTFIX" ]]; then
+  error_exit "Missing required option: --postfix <name>"
+fi
+
+STORAGE_ACCOUNT_NAME="footerraform${POSTFIX,,}" # lowercase enforced
+SP_DISPLAY_NAME="${APP_NAME} SP"
+SP_SCOPE="/subscriptions/$(az account show --query id -o tsv)/resourceGroups/$RESOURCE_GROUP_NAME"
 
 # Check required tools
 command -v az >/dev/null || error_exit "Azure CLI not found."
 command -v jq >/dev/null || error_exit "jq not found."
 
-# Perform destroy if requested
+SUBSCRIPTION_ID=$(az account show --query id -o tsv)
+
+# Function to destroy
+function destroy {
+  log "Preparing to destroy resources..."
+  if $DRY_RUN; then
+    log "[Dry Run] The following resources would be destroyed:"
+    log "  - Service Principal: '$SP_DISPLAY_NAME'"
+    log "  - Resource Group: '$RESOURCE_GROUP_NAME'"
+    log "  - Storage Account: '$STORAGE_ACCOUNT_NAME'"
+    log "  - Storage Container: '$CONTAINER_NAME'"
+    log "  - terraform.tfvars file: '$TFVARS_FILE'"
+    return
+  fi
+
+  log "Destroying resources..."
+
+  APP_ID=$(az ad sp list --display-name "$SP_DISPLAY_NAME" --query "[0].appId" -o tsv)
+  [[ -n "$APP_ID" ]] && az ad sp delete --id "$APP_ID" && log "Deleted SP" || warn "SP not found"
+
+  az group delete --name "$RESOURCE_GROUP_NAME" --yes --no-wait || warn "Resource group deletion failed"
+
+  [[ -f "$TFVARS_FILE" ]] && rm "$TFVARS_FILE"
+
+  log "Environment destroyed."
+  exit 0
+}
+
+# Handle destroy mode
 if $RUN_DESTROY; then
   destroy
   exit 0
 fi
 
-# Must explicitly set --provision to proceed
+# Enforce --provision to proceed
 if ! $RUN_PROVISION; then
   usage
   exit 1
 fi
 
-# --- Begin Provisioning ---
+log "Provisioning Terraform infrastructure (dry-run: $DRY_RUN)"
 
-log "Getting subscription ID..."
-SUBSCRIPTION_ID=$(az account show --query id -o tsv)
-
-log "Creating resource group..."
+# Resource Group
 if az group show --name "$RESOURCE_GROUP_NAME" &>/dev/null; then
   warn "Resource group '$RESOURCE_GROUP_NAME' already exists."
 else
-  if $DRY_RUN; then
-    log "[Dry Run] Would create resource group '$RESOURCE_GROUP_NAME' in '$LOCATION'."
-  else
-    az group create --name "$RESOURCE_GROUP_NAME" --location "$LOCATION" || error_exit "Failed to create resource group."
-  fi
+  $DRY_RUN && log "[Dry Run] Would create Resource Group: '$RESOURCE_GROUP_NAME' in '$LOCATION'" || \
+    az group create --name "$RESOURCE_GROUP_NAME" --location "$LOCATION"
 fi
 
-log "Checking for existing service principal..."
-if az ad sp list --display-name "$TERRAFORM_FOO_APP_SP_NAME" --query "[0].appId" -o tsv | grep -q .; then
-  warn "Service principal '$TERRAFORM_FOO_APP_SP_NAME' already exists. Skipping creation."
-  CLIENT_ID=$(az ad sp list --display-name "$TERRAFORM_FOO_APP_SP_NAME" --query "[0].appId" -o tsv)
+# Service Principal
+SP_EXISTS=$(az ad sp list --display-name "$SP_DISPLAY_NAME" --query "[0].appId" -o tsv)
+if [[ -n "$SP_EXISTS" ]]; then
+  warn "Service principal '$SP_DISPLAY_NAME' already exists."
+  CLIENT_ID="$SP_EXISTS"
   TENANT_ID=$(az account show --query tenantId -o tsv)
-  warn "You need to manually retrieve the client secret."
   CLIENT_SECRET="<INSERT_YOUR_CLIENT_SECRET>"
 else
   if $DRY_RUN; then
-    log "[Dry Run] Would create service principal '$TERRAFORM_FOO_APP_SP_NAME'."
-    CLIENT_ID="<dry-run-client-id>"
-    CLIENT_SECRET="<dry-run-client-secret>"
-    TENANT_ID="<dry-run-tenant-id>"
+    log "[Dry Run] Would create service principal:"
+    log "  - Name: '$SP_DISPLAY_NAME'"
+    log "  - Role: Contributor"
+    log "  - Scope: $SP_SCOPE"
+    CLIENT_ID="<dryrun-client-id>"
+    CLIENT_SECRET="<dryrun-client-secret>"
+    TENANT_ID="<dryrun-tenant-id>"
   else
     log "Creating service principal..."
-    TERRAFORM_FOO_APP_SP=$(az ad sp create-for-rbac \
-      --name "${TERRAFORM_FOO_APP_SP_NAME}" \
-      --role="Contributor" \
-      --scopes="/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP_NAME}") || error_exit "Failed to create service principal."
-
-    CLIENT_ID=$(echo "$TERRAFORM_FOO_APP_SP" | jq -r '.appId')
-    CLIENT_SECRET=$(echo "$TERRAFORM_FOO_APP_SP" | jq -r '.password')
-    TENANT_ID=$(echo "$TERRAFORM_FOO_APP_SP" | jq -r '.tenant')
+    SP=$(az ad sp create-for-rbac \
+      --name "$SP_DISPLAY_NAME" \
+      --role Contributor \
+      --scopes "$SP_SCOPE")
+    CLIENT_ID=$(echo "$SP" | jq -r .appId)
+    CLIENT_SECRET=$(echo "$SP" | jq -r .password)
+    TENANT_ID=$(echo "$SP" | jq -r .tenant)
   fi
 fi
 
-STORAGE_ACCOUNT_NAME="footerraform$(date +%s)"
-log "Creating storage account for Terraform state..."
-if az storage account show --name "$STORAGE_ACCOUNT_NAME" --resource-group "$RESOURCE_GROUP_NAME" &>/dev/null; then
-  warn "Storage account '$STORAGE_ACCOUNT_NAME' already exists."
-else
-  if $DRY_RUN; then
-    log "[Dry Run] Would create storage account '$STORAGE_ACCOUNT_NAME'."
-  else
-    az storage account create \
-      --name "$STORAGE_ACCOUNT_NAME" \
-      --resource-group "$RESOURCE_GROUP_NAME" \
-      --location "$LOCATION" \
-      --sku Standard_LRS || error_exit "Failed to create storage account."
-  fi
+# Check Storage Account Availability
+log "Checking storage account availability for '$STORAGE_ACCOUNT_NAME'..."
+AVAIL=$(az storage account check-name --name "$STORAGE_ACCOUNT_NAME" --query "nameAvailable" -o tsv)
+if [[ "$AVAIL" != "true" ]]; then
+  error_exit "Storage account name '$STORAGE_ACCOUNT_NAME' is not available. Choose a different --postfix."
 fi
+log "Storage account name '$STORAGE_ACCOUNT_NAME' is available."
 
+# Create Storage Account
 if $DRY_RUN; then
-  log "[Dry Run] Would retrieve storage account key and create blob container '$CONTAINER_NAME'."
+  log "[Dry Run] Would create storage account:"
+  log "  - Name: $STORAGE_ACCOUNT_NAME"
+  log "  - Resource Group: $RESOURCE_GROUP_NAME"
+  log "  - Location: $LOCATION"
+else
+  az storage account create \
+    --name "$STORAGE_ACCOUNT_NAME" \
+    --resource-group "$RESOURCE_GROUP_NAME" \
+    --location "$LOCATION" \
+    --sku Standard_LRS || error_exit "Failed to create storage account."
+fi
+
+# Create Storage Container
+if $DRY_RUN; then
+  log "[Dry Run] Would check and create blob container:"
+  log "  - Container: $CONTAINER_NAME"
+  log "  - Account: $STORAGE_ACCOUNT_NAME"
 else
   STORAGE_KEY=$(az storage account keys list \
-    --resource-group "$RESOURCE_GROUP_NAME" \
     --account-name "$STORAGE_ACCOUNT_NAME" \
+    --resource-group "$RESOURCE_GROUP_NAME" \
     --query "[0].value" -o tsv)
 
-  log "Creating blob container..."
+  CONTAINER_EXISTS=$(az storage container exists \
+    --name "$CONTAINER_NAME" \
+    --account-name "$STORAGE_ACCOUNT_NAME" \
+    --account-key "$STORAGE_KEY" \
+    --query "exists" -o tsv)
+
+  if [[ "$CONTAINER_EXISTS" == "true" ]]; then
+    error_exit "Container '$CONTAINER_NAME' already exists in storage account '$STORAGE_ACCOUNT_NAME'."
+  fi
+
   az storage container create \
     --name "$CONTAINER_NAME" \
     --account-name "$STORAGE_ACCOUNT_NAME" \
-    --account-key "$STORAGE_KEY" || error_exit "Failed to create blob container."
+    --account-key "$STORAGE_KEY"
 fi
 
-log "Generating terraform.tfvars..."
+# Generate terraform.tfvars
+log "Generating terraform.tfvars at $TFVARS_FILE"
 cat <<EOF > "$TFVARS_FILE"
 client_id            = "$CLIENT_ID"
 client_secret        = "$CLIENT_SECRET"
@@ -210,7 +253,8 @@ resource_group_name  = "$RESOURCE_GROUP_NAME"
 resource_group_location = "$LOCATION"
 EOF
 
-log "Terraform backend block example:"
+# Backend block
+log "Terraform backend block (for your main.tf):"
 cat <<EOF
 
 terraform {
@@ -224,9 +268,7 @@ terraform {
 EOF
 
 if $DRY_RUN; then
-  log "Dry run complete. No changes were made."
+  log "✅ Dry run complete — no resources were created."
 else
-  log "Environment setup complete."
-  log "You can now run 'terraform init' to initialize the backend."
-  log "To destroy the environment, run the script with the --destroy flag."
+  log "✅ Provisioning complete. You can now run 'terraform init'."
 fi
