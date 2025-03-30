@@ -9,7 +9,37 @@ CONTAINER_NAME="tfstate"
 TERRAFORM_FOO_APP_SP_NAME="${APP_NAME} SP"
 TFVARS_FILE="../terraform/terraform.tfvars"
 
-DRY_RUN=false
+# Default flags
+DRY_RUN=true
+RUN_PROVISION=false
+RUN_DESTROY=false
+
+function usage {
+  echo -e "\033[1;36mUsage:\033[0m"
+  echo "  $0 --provision [--no-dry-run]   Run infrastructure setup (default: dry run)"
+  echo "  $0 --destroy [--no-dry-run]     Tear down created resources (default: dry run)"
+  echo "  $0 --help                       Show detailed help"
+  echo "  $0 --usage                      Show this usage summary"
+  echo
+  echo "Examples:"
+  echo "  $0 --provision"
+  echo "  $0 --provision --no-dry-run"
+  echo "  $0 --destroy --no-dry-run"
+}
+
+function help {
+  echo -e "\033[1;36mAzure Terraform Environment Setup Script\033[0m"
+  echo
+  echo "This script prepares or destroys the Azure environment for Terraform:"
+  echo "- Creates or removes a resource group"
+  echo "- Manages a service principal"
+  echo "- Manages an Azure Storage account + container"
+  echo "- Writes or deletes terraform.tfvars"
+  echo
+  echo "By default, all actions are run in dry-run mode. Use --no-dry-run to apply changes."
+  echo
+  usage
+}
 
 function log {
   echo -e "\033[1;34m[INFO]\033[0m $1"
@@ -27,7 +57,7 @@ function error_exit {
 function destroy {
   if $DRY_RUN; then
     log "[Dry Run] Would delete service principal and resource group."
-    exit 0
+    return
   fi
 
   log "Destroying Terraform SP and resource group..."
@@ -41,30 +71,63 @@ function destroy {
   fi
 
   az group delete --name "$RESOURCE_GROUP_NAME" --yes --no-wait || warn "Failed to delete resource group."
-
   [[ -f "$TFVARS_FILE" ]] && rm "$TFVARS_FILE"
+
   log "Environment destroyed."
   exit 0
 }
 
-# Handle flags
+# Parse arguments
+if [[ $# -eq 0 ]]; then
+  usage
+  exit 0
+fi
+
 for arg in "$@"; do
   case $arg in
+    --provision)
+      RUN_PROVISION=true
+      ;;
     --destroy)
-      destroy
+      RUN_DESTROY=true
       ;;
     --dry-run)
       DRY_RUN=true
-      shift
+      ;;
+    --no-dry-run)
+      DRY_RUN=false
+      ;;
+    --help)
+      help
+      exit 0
+      ;;
+    --usage)
+      usage
+      exit 0
       ;;
     *)
+      error_exit "Unknown option: $arg. Use --help to see available options."
       ;;
   esac
 done
 
-# Check prerequisites
+# Check required tools
 command -v az >/dev/null || error_exit "Azure CLI not found."
 command -v jq >/dev/null || error_exit "jq not found."
+
+# Perform destroy if requested
+if $RUN_DESTROY; then
+  destroy
+  exit 0
+fi
+
+# Must explicitly set --provision to proceed
+if ! $RUN_PROVISION; then
+  usage
+  exit 1
+fi
+
+# --- Begin Provisioning ---
 
 log "Getting subscription ID..."
 SUBSCRIPTION_ID=$(az account show --query id -o tsv)
