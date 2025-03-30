@@ -5,10 +5,9 @@ terraform {
       version = "4.1.0"
     }
   }
-
   backend "azurerm" {
     resource_group_name  = "foo-app-rg"
-    storage_account_name = "footerraform1743276144"
+    storage_account_name = "footerraform1aa1"
     container_name       = "tfstate"
     key                  = "terraform.tfstate"
   }
