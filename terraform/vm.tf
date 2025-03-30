@@ -7,12 +7,11 @@ resource "azurerm_virtual_network" "vm" {
 
 resource "azurerm_subnet" "vm" {
   name                 = "default"
-  resource_group_name = var.resource_group_name
+  resource_group_name  = var.resource_group_name
   virtual_network_name = azurerm_virtual_network.vm.name
   address_prefixes     = ["10.0.0.0/24"]
 
   depends_on = [ azurerm_virtual_network.vm ]
-
 }
 
 resource "azurerm_network_security_group" "vm" {
@@ -43,8 +42,6 @@ resource "azurerm_network_security_group" "vm" {
     source_address_prefix      = "*"
     destination_address_prefix = "*"
   }
-  
-  depends_on = [  ]
 }
 
 resource "azurerm_public_ip" "vm" {
@@ -54,8 +51,9 @@ resource "azurerm_public_ip" "vm" {
   allocation_method   = "Static"
   sku                 = "Standard"
 
-  depends_on = [  ]
+  domain_name_label   = "foo-vm-public"
 }
+
 
 resource "azurerm_network_interface" "vm" {
   name                = "foo-vm564"
@@ -68,13 +66,15 @@ resource "azurerm_network_interface" "vm" {
     private_ip_address_allocation = "Dynamic"
     public_ip_address_id          = azurerm_public_ip.vm.id
   }
-#  network_security_group_id = azurerm_network_security_group.vm.id
+
+  internal_dns_name_label = "foo-vm"
+  
   depends_on = [ azurerm_subnet.vm, azurerm_public_ip.vm ]
 }
 
 resource "azurerm_network_interface_security_group_association" "vm" {
   network_interface_id       = azurerm_network_interface.vm.id
-  network_security_group_id = azurerm_network_security_group.vm.id
+  network_security_group_id  = azurerm_network_security_group.vm.id
 
   depends_on = [ azurerm_network_interface.vm, azurerm_network_security_group.vm ]
 }
@@ -91,7 +91,7 @@ resource "azurerm_linux_virtual_machine" "vm" {
 
   admin_ssh_key {
     username   = "azureuser"
-    public_key = file("./foo-vm-ssh-key.pub") # Replace with your actual public key path
+    public_key = file("./foo-vm-ssh-key.pub")
   }
 
   os_disk {
@@ -99,7 +99,6 @@ resource "azurerm_linux_virtual_machine" "vm" {
     storage_account_type = "StandardSSD_LRS"
     name                 = "foo-vm-osdisk"
     disk_size_gb         = 30
-#    delete_option       = "Detach"
   }
 
   source_image_reference {
@@ -109,35 +108,20 @@ resource "azurerm_linux_virtual_machine" "vm" {
     version   = "latest"
   }
 
-#  security_type = "TrustedLaunch"
   secure_boot_enabled = true
   vtpm_enabled        = true
 
   additional_capabilities {
     hibernation_enabled = false
-    ultra_ssd_enabled   = false 
+    ultra_ssd_enabled   = false
   }
 
-    custom_data = base64encode(<<-EOF
+  custom_data = base64encode(<<-EOF
     #cloud-config
     package_update: true
     package_upgrade: true
   EOF
   )
-
-  # provisioner "remote-exec" {
-  #   inline = [
-  #     "sudo apt-get update -y",
-  #     "sudo apt-get upgrade -y"
-  #   ]
-
-  #   connection {
-  #     type        = "ssh"
-  #     user        = "azureuser"
-  #     private_key = file("././foo-vm-ssh-key.pem")
-  #     host        = self.public_ip_address
-  #   }
-  # }
 
   identity {
     type = "SystemAssigned"
