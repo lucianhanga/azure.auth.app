@@ -66,6 +66,6 @@
                 - "80"
 
     - name: Launch the containers
-      command: docker-compose up -d
+      command: docker-compose up -d --remove-orphans
       args:
         chdir: /opt/nginx-proxy
