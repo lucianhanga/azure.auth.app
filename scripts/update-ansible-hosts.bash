@@ -3,10 +3,10 @@
 set -euo pipefail
 
 # === CONFIGURATION ===
-RESOURCE_GROUP="foo-app-rg"
 VM_NAME="foo-vm"
 ANSIBLE_HOSTS_FILE="../ansible/hosts.ini"
-SSH_KEY_FILE="../terraform/foo-vm-ssh-key.pem"
+TERRAFORM_DIR="../terraform"
+SSH_KEY_FILE="$TERRAFORM_DIR/foo-vm-ssh-key.pem"
 ANSIBLE_USER="azureuser"
 PYTHON_PATH="/usr/bin/python3"
 GROUP_HEADER="[azure]"
@@ -26,57 +26,27 @@ function error_exit {
 }
 
 # === BEGIN ===
-log "Starting Ansible hosts file update process for VM '$VM_NAME'..."
+log "Starting Ansible hosts file update using Terraform output..."
 
-# 1. Check if VM exists
-log "Checking if VM '$VM_NAME' exists in resource group '$RESOURCE_GROUP'..."
-if ! az vm show --name "$VM_NAME" --resource-group "$RESOURCE_GROUP" &>/dev/null; then
-  error_exit "VM '$VM_NAME' does not exist in resource group '$RESOURCE_GROUP'."
-fi
-log "VM '$VM_NAME' found."
+# 1. Ensure Terraform output is accessible
+log "Reading Terraform outputs from directory: $TERRAFORM_DIR"
+cd "$TERRAFORM_DIR"
 
-# 2. Check VM status
-log "Checking VM power state..."
-VM_STATUS=$(az vm get-instance-view --name "$VM_NAME" --resource-group "$RESOURCE_GROUP" \
-  --query "instanceView.statuses[?starts_with(code,'PowerState/')].displayStatus" -o tsv)
-
-log "VM power state is: $VM_STATUS"
-if [[ "$VM_STATUS" != "VM running" ]]; then
-  error_exit "VM '$VM_NAME' is not running. Please start it before running this script."
+if ! terraform output &>/dev/null; then
+  error_exit "Terraform outputs not found. Make sure 'terraform apply' has been run successfully in $TERRAFORM_DIR."
 fi
 
-# 3. Retrieve public IP address
-log "Fetching NIC attached to VM..."
-NIC_ID=$(az vm show --name "$VM_NAME" --resource-group "$RESOURCE_GROUP" --query "networkProfile.networkInterfaces[0].id" -o tsv)
-NIC_NAME=$(basename "$NIC_ID")
-log "NIC ID: $NIC_ID"
-log "NIC Name: $NIC_NAME"
-
-log "Retrieving IP configuration for NIC..."
-IP_CONFIG_NAME=$(az network nic show --name "$NIC_NAME" --resource-group "$RESOURCE_GROUP" --query "ipConfigurations[0].name" -o tsv)
-log "IP Configuration Name: $IP_CONFIG_NAME"
-
-log "Retrieving public IP ID from NIC..."
-PUBLIC_IP_ID=$(az network nic show \
-  --name "$NIC_NAME" \
-  --resource-group "$RESOURCE_GROUP" \
-  --query "ipConfigurations[0].publicIpAddress.id" -o tsv)
-
-if [[ -z "$PUBLIC_IP_ID" ]]; then
-  error_exit "No public IP is associated with NIC '$NIC_NAME'. Make sure the VM has a public IP."
-fi
-log "Public IP Resource ID: $PUBLIC_IP_ID"
-
-log "Retrieving Public IP address value..."
-PUBLIC_IP=$(az network public-ip show --ids "$PUBLIC_IP_ID" --query "ipAddress" -o tsv)
+# 2. Get the public IP
+log "Extracting 'public_ip' from Terraform outputs..."
+PUBLIC_IP=$(terraform output -raw public_ip)
 
 if [[ -z "$PUBLIC_IP" ]]; then
-  error_exit "Failed to retrieve public IP address for VM '$VM_NAME'."
+  error_exit "Terraform output 'public_ip' is empty or not defined."
 fi
 
-log "Public IP address retrieved: $PUBLIC_IP"
+log "Retrieved public IP: $PUBLIC_IP"
 
-# 4. Update Ansible hosts file
+# 3. Update Ansible hosts file
 log "Preparing to update Ansible inventory at '$ANSIBLE_HOSTS_FILE'..."
 
 # Backup
