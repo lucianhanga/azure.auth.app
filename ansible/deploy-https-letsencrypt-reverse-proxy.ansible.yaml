@@ -1,0 +1,68 @@
+# Ansible Playbook to Deploy NGINX with HTTPS via Let's Encrypt using nginx-proxy + acme-companion
+
+---
+- name: Deploy HTTPS-enabled NGINX container with Let's Encrypt
+  hosts: azure
+  become: true
+
+  vars:
+    domain_name: "foo-vm-public.westeurope.cloudapp.azure.com"
+    email: "lucianhanga@gmx.net"
+
+  tasks:
+    - name: Ensure Docker service is running
+      service:
+        name: docker
+        state: started
+        enabled: true
+
+    - name: Create nginx-proxy setup directory
+      file:
+        path: /opt/nginx-proxy
+        state: directory
+        mode: '0755'
+
+    - name: Deploy nginx-proxy stack with Docker Compose
+      copy:
+        dest: /opt/nginx-proxy/docker-compose.yml
+        content: |
+          version: '3'
+
+          services:
+            nginx-proxy:
+              image: nginxproxy/nginx-proxy
+              container_name: nginx-proxy
+              restart: always
+              ports:
+                - "80:80"
+                - "443:443"
+              volumes:
+                - /etc/nginx/certs
+                - /etc/nginx/vhost.d
+                - /usr/share/nginx/html
+                - /var/run/docker.sock:/tmp/docker.sock:ro
+
+            acme-companion:
+              image: nginxproxy/acme-companion
+              container_name: nginx-proxy-acme
+              restart: always
+              volumes_from:
+                - nginx-proxy
+              volumes:
+                - /var/run/docker.sock:/var/run/docker.sock:ro
+                - /etc/acme.sh:/etc/acme.sh
+
+            demo-nginx:
+              image: nginx
+              restart: always
+              environment:
+                - VIRTUAL_HOST={{ domain_name }}
+                - LETSENCRYPT_HOST={{ domain_name }}
+                - LETSENCRYPT_EMAIL={{ email }}
+              expose:
+                - "80"
+
+    - name: Launch the containers
+      command: docker-compose up -d
+      args:
+        chdir: /opt/nginx-proxy
