@@ -23,3 +23,4 @@
         restart_policy: always
         ports:
           - "80:80"
+        container_default_behavior: compatibility  # Explicitly set to avoid deprecation warning
