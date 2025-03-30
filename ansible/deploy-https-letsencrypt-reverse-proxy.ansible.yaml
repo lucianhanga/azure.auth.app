@@ -1,5 +1,4 @@
 # Ansible Playbook to Deploy NGINX with HTTPS via Let's Encrypt using nginx-proxy + acme-companion
-
 ---
 - name: Deploy HTTPS-enabled NGINX container with Let's Encrypt
   hosts: azure
@@ -10,17 +9,21 @@
     email: "lucianhanga@gmx.net"
 
   tasks:
-    - name: Ensure Docker service is running
-      service:
+    - name: Ensure Docker is running and enabled
+      ansible.builtin.service:
         name: docker
         state: started
         enabled: true
 
-    - name: Create nginx-proxy setup directory
+    - name: Create persistent directories for nginx-proxy
       file:
-        path: /opt/nginx-proxy
+        path: "{{ item }}"
         state: directory
         mode: '0755'
+      loop:
+        - /opt/nginx-proxy
+        - /opt/nginx-proxy/certs
+        - /opt/nginx-proxy/acme
 
     - name: Deploy nginx-proxy stack with Docker Compose
       copy:
@@ -37,7 +40,7 @@
                 - "80:80"
                 - "443:443"
               volumes:
-                - /etc/nginx/certs
+                - /opt/nginx-proxy/certs:/etc/nginx/certs
                 - /etc/nginx/vhost.d
                 - /usr/share/nginx/html
                 - /var/run/docker.sock:/tmp/docker.sock:ro
@@ -49,8 +52,8 @@
               volumes_from:
                 - nginx-proxy
               volumes:
+                - /opt/nginx-proxy/acme:/etc/acme.sh
                 - /var/run/docker.sock:/var/run/docker.sock:ro
-                - /etc/acme.sh:/etc/acme.sh
 
             demo-nginx:
               image: nginx

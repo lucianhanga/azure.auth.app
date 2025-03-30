@@ -17,3 +17,8 @@ output "external_dns_name" {
   description = "The public DNS name of the virtual machine"
   value       = "${azurerm_public_ip.vm.domain_name_label}.${var.resource_group_location}.cloudapp.azure.com"
 }
+
+output "admin_username" {
+  description = "The admin username of the virtual machine"
+  value       = azurerm_linux_virtual_machine.vm.admin_username
+}
