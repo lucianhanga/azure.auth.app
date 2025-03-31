@@ -5,7 +5,7 @@
   become: true
 
   vars:
-    domain_name: "foo-vm-public.westeurope.cloudapp.azure.com"
+    domain_name: "foo-vm.internal.cloudapp.net"
     email: "lucianhanga@gmx.net"
 
   tasks:
