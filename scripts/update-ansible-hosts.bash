@@ -38,7 +38,7 @@ fi
 
 # 2. Get the public IP
 log "Extracting 'public_ip' from Terraform outputs..."
-PUBLIC_IP=$(terraform output -raw public_ip)
+PUBLIC_IP=$(terraform output -raw foo_vm_public_ip)
 
 if [[ -z "$PUBLIC_IP" ]]; then
   error_exit "Terraform output 'public_ip' is empty or not defined."
