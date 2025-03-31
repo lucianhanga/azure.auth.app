@@ -1,5 +1,5 @@
-terraform/terraform.tfvars
+**/terraform.tfvars
 ansible/hosts.ini.bak
-terraform/.terraform
-terraform/.terraform.lock.hcl
+**/.terraform
+**/.terraform.lock.hcl
 terraform/foo-vm-ssh-key.pem
