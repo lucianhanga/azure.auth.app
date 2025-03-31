@@ -22,8 +22,8 @@ resource "azurerm_public_ip" "proxy-vm" {
   name                = "proxy-vm-ip"
   location            = var.resource_group_location
   resource_group_name = var.resource_group_name
-  allocation_method   = "Static"
-  sku                 = "Standard"
+  allocation_method   = "Dynamic"
+  sku                 = "Basic"
 
   domain_name_label   = "proxy-vm-public"
 }
