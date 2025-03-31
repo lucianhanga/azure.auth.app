@@ -31,6 +31,8 @@ resource "azurerm_network_security_group" "vm" {
     destination_address_prefix = "*"
   }
 
+# allow only from azure services
+  
   security_rule {
     name                       = "HTTP"
     priority                   = 310
@@ -39,7 +41,7 @@ resource "azurerm_network_security_group" "vm" {
     protocol                   = "Tcp"
     source_port_range          = "*"
     destination_port_range     = "80"
-    source_address_prefix      = "*"
+    source_address_prefix      = "AzureCloud"
     destination_address_prefix = "*"
   }
   security_rule {
@@ -50,7 +52,7 @@ resource "azurerm_network_security_group" "vm" {
     protocol                   = "Tcp"
     source_port_range          = "*"
     destination_port_range     = "443"
-    source_address_prefix      = "*"
+    source_address_prefix      = "AzureCloud"
     destination_address_prefix = "*"
   }
 }
@@ -140,5 +142,8 @@ resource "azurerm_linux_virtual_machine" "vm" {
     type = "SystemAssigned"
   }
 
-  depends_on = [ azurerm_network_interface.vm, azurerm_public_ip.vm, azurerm_network_security_group.vm ]
+  depends_on = [ 
+    azurerm_network_interface.vm, 
+    azurerm_network_security_group.vm
+  ]
 }
