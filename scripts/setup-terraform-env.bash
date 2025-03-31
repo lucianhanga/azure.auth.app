@@ -12,12 +12,13 @@ TFVARS_FILE="../terraform/terraform.tfvars"
 DRY_RUN=true
 RUN_PROVISION=false
 RUN_DESTROY=false
+REUSE_STORAGE=false
 POSTFIX=""
 
 # Functions
 function usage {
   echo -e "\033[1;36mUsage:\033[0m"
-  echo "  $0 --provision --postfix <name> [--no-dry-run]"
+  echo "  $0 --provision --postfix <name> [--no-dry-run] [--reuse]"
   echo "  $0 --destroy   --postfix <name> [--no-dry-run]"
   echo "  $0 --help | --usage"
   echo
@@ -26,6 +27,7 @@ function usage {
   echo "  --destroy           Tear down infrastructure (default: dry run)"
   echo "  --postfix <name>    Required postfix to uniquely name storage account"
   echo "  --no-dry-run        Apply changes for real"
+  echo "  --reuse             Reuse existing storage account if available"
   echo "  --help              Show detailed help"
   echo "  --usage             Show usage"
   echo
@@ -82,6 +84,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --no-dry-run)
       DRY_RUN=false
+      shift
+      ;;
+    --reuse)
+      REUSE_STORAGE=true
       shift
       ;;
     --postfix)
@@ -170,8 +176,19 @@ SP_EXISTS=$(az ad sp list --display-name "$SP_DISPLAY_NAME" --query "[0].appId" 
 if [[ -n "$SP_EXISTS" ]]; then
   warn "Service principal '$SP_DISPLAY_NAME' already exists."
   CLIENT_ID="$SP_EXISTS"
+  log "Using existing service principal with ID: $CLIENT_ID"
   TENANT_ID=$(az account show --query tenantId -o tsv)
-  CLIENT_SECRET="<INSERT_YOUR_CLIENT_SECRET>"
+
+  if $DRY_RUN; then
+    log "[Dry Run] Would generate a new secret for the existing service principal."
+    CLIENT_SECRET="<dryrun-client-secret>"
+  else
+    log "Generating a new secret for the existing service principal..."
+    CLIENT_SECRET=$(az ad sp credential reset \
+      --id "$CLIENT_ID" \
+      --years 1 -o tsv | awk '{print $2}') || error_exit "Failed to generate a new secret for the service principal."
+    log "New secret generated successfully."
+  fi
 else
   if $DRY_RUN; then
     log "[Dry Run] Would create service principal:"
@@ -197,9 +214,14 @@ fi
 log "Checking storage account availability for '$STORAGE_ACCOUNT_NAME'..."
 AVAIL=$(az storage account check-name --name "$STORAGE_ACCOUNT_NAME" --query "nameAvailable" -o tsv)
 if [[ "$AVAIL" != "true" ]]; then
-  error_exit "Storage account name '$STORAGE_ACCOUNT_NAME' is not available. Choose a different --postfix."
+  if $REUSE_STORAGE; then
+    log "Reusing existing storage account '$STORAGE_ACCOUNT_NAME'."
+  else
+    error_exit "Storage account name '$STORAGE_ACCOUNT_NAME' is not available. Choose a different --postfix or use --reuse."
+  fi
+else
+  log "Storage account name '$STORAGE_ACCOUNT_NAME' is available."
 fi
-log "Storage account name '$STORAGE_ACCOUNT_NAME' is available."
 
 # Create Storage Account
 if $DRY_RUN; then
@@ -207,7 +229,7 @@ if $DRY_RUN; then
   log "  - Name: $STORAGE_ACCOUNT_NAME"
   log "  - Resource Group: $RESOURCE_GROUP_NAME"
   log "  - Location: $LOCATION"
-else
+elif ! $REUSE_STORAGE || [[ "$AVAIL" == "true" ]]; then
   az storage account create \
     --name "$STORAGE_ACCOUNT_NAME" \
     --resource-group "$RESOURCE_GROUP_NAME" \
@@ -233,13 +255,14 @@ else
     --query "exists" -o tsv)
 
   if [[ "$CONTAINER_EXISTS" == "true" ]]; then
-    error_exit "Container '$CONTAINER_NAME' already exists in storage account '$STORAGE_ACCOUNT_NAME'."
+    warn "Container '$CONTAINER_NAME' already exists in storage account '$STORAGE_ACCOUNT_NAME'."
+  else
+    az storage container create \
+      --name "$CONTAINER_NAME" \
+      --account-name "$STORAGE_ACCOUNT_NAME" \
+      --account-key "$STORAGE_KEY" || error_exit "Failed to create storage container."
+    log "Storage container '$CONTAINER_NAME' created successfully."
   fi
-
-  az storage container create \
-    --name "$CONTAINER_NAME" \
-    --account-name "$STORAGE_ACCOUNT_NAME" \
-    --account-key "$STORAGE_KEY"
 fi
 
 # Generate terraform.tfvars
